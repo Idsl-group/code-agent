@@ -144,6 +144,7 @@ def tool_calling_node(state: AgentState):
     llm_with_tools = get_llm(API_KEY).bind_tools(list(tools.values()))
     
     tools_str = render_text_description_and_args(list(tools.values()))
+    
     tool_prompt = prompt.partial(tools=tools_str)
     chain = (tool_prompt | llm_with_tools)
     

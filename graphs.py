@@ -27,7 +27,7 @@ def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
 
 def build_graph(api_key):
     set_api_key(api_key)
-    workflow = StateGraph(AgentState)
+    workflow = StateGraph(AgentState) # State object will follow the AgentState schema.
 
     # Add the nodes
     workflow.add_node("tool_calling_node", tool_calling_node)

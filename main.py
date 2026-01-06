@@ -1,3 +1,4 @@
+# Load environment variables 
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -7,8 +8,6 @@ import argparse
 import langchain_core
 from langchain_core import prompts
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-
-# Load environment variables 
 
 from graphs import build_graph
 from schemas import AgentState
