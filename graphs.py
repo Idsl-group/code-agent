@@ -1,52 +1,50 @@
 from typing import Literal
-from schemas import AgentState
-from nodes import tool_calling_node, tool_node, set_api_key
 from langgraph.graph import StateGraph, START, END
 
-# --- Routing Logic ---
-
-def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
-    """
-    Determines the next step based on the Agent's last message.
-    If the Agent made a tool call, we route to 'tools'.
-    Otherwise, we finish (END).
-    """
-    messages = state["messages"]
-    print(f"Messages Length: {len(messages)}")
-    print([f.type for f in messages])
-    last_message = messages[-1]
-    
-    # If the LLM output contains tool_calls, route to tools
-    if last_message.tool_calls:
-        return "tools"
-    
-    # If no tool calls, we are done
-    return END
+from schemas import AgentState
+from nodes import set_api_key
+from nodes import ToolCallingAgent, ReflectionAgent
 
 # --- Graph Construction ---
 
 def build_graph(api_key):
     set_api_key(api_key)
+    tool_calling_agent = ToolCallingAgent(api_key)
+    reflection_agent = ReflectionAgent(api_key)
+    
     workflow = StateGraph(AgentState) # State object will follow the AgentState schema.
 
     # Add the nodes
-    workflow.add_node("tool_calling_node", tool_calling_node)
-    workflow.add_node("tools", tool_node)
-    
+    workflow.add_node("tool_calling_node", tool_calling_agent.tool_calling_node)
+    workflow.add_node("tool_node", tool_calling_agent.tool_node)
+    workflow.add_node("reflection_node", reflection_agent.reflect)
+    workflow.add_node("user_input_node", reflection_agent.user_input_node)
     # Set the entry point
-    workflow.set_entry_point("tool_calling_node")
-
+    workflow.add_edge(START, "tool_calling_node")
+    workflow.add_edge("tool_node", "reflection_node")
+    workflow.add_edge("user_input_node", "tool_calling_node")
     # Add the conditional edges
     workflow.add_conditional_edges(
         "tool_calling_node",
-        should_continue,
-        # {
-        #     "tools": "tools",
-        #     END: END
-        # }
+        tool_calling_agent.should_continue,
+        {
+            "tool_node": "tool_node",
+            "reflect": "reflection_node",
+            "__end__": END,
+        }
     )
-
-    # Add the edge from tools back to agent (The Loop)
-    # After a tool runs, control goes back to the agent to process the result
-
-    return workflow.compile()
+    workflow.add_conditional_edges(
+        "reflection_node",
+        reflection_agent.should_continue,
+        {
+            "tool_calling_node": "tool_calling_node", 
+            "user_input_node": "user_input_node",
+             "__end__": END, 
+        },
+    )
+    
+    coding_agent_graph = workflow.compile()
+    print("\n Graph compiled successfully!")
+    print(" Reflection loop enabled: reflection_node can route back to tool_calling_node")
+    print("="*60 + "\n")
+    return coding_agent_graph

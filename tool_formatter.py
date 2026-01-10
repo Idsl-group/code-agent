@@ -1,16 +1,95 @@
-import json
-import re
+import json, ast
+import re, copy
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain.prompts.chat import ChatPromptTemplate
 
+from tools_template import *
 
 _TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
     re.DOTALL
 )
+
+def json_output_parser(llm, message_content, required_keys=None, force_parse=False, tools=None, max_retries=5):
+    """
+    Parses a JSON string from LLM output, with an LLM-based fallback for repair.
+    """
+    
+    def extract_json_str(text):
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match:
+            return match.group(1)
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            return match.group(1)
+        return text.strip()
+
+    def local_parse(text):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                return None
+
+    try:
+        json_str = extract_json_str(message_content)
+        parsed_json = local_parse(json_str)
+        if parsed_json:
+            if required_keys is not None:
+                assert set(list(parsed_json.keys()))==set(required_keys)
+                return {k: parsed_json.get(k) for k in required_keys if k in parsed_json}
+            return parsed_json
+    except Exception as e:
+        if force_parse:
+            raise ValueError(f"Failed to parse JSON due to error `{e}` \n{message_content}")
+        print(f"Using LLM JSON PARSER due to error: {e}")
+
+    current_text = copy.deepcopy(message_content)
+    tool_str = JSON_PARSER_TEMPLATE["tool_call"].format(tools=tools) if tools is not None else ""
+    if required_keys:
+        format_instr = f"Ensure the JSON contains the following keys: {', '.join(required_keys)}.{tool_str}"
+    else:
+        format_instr = "Ensure the output is a valid JSON.{tool_str}"
+
+    repair_chain = (
+        ChatPromptTemplate.from_messages([
+            ("system", JSON_PARSER_TEMPLATE["system"]),
+            ("human", JSON_PARSER_TEMPLATE["human"])
+        ]) 
+        | llm 
+        | StrOutputParser()
+    )
+
+    for _ in range(max_retries):
+        try:
+            fixed_str = repair_chain.invoke({
+                "json_string": current_text,
+                "format_instructions": format_instr
+            })
+            clean_fixed_str = extract_json_str(fixed_str)
+            parsed_json = local_parse(clean_fixed_str)
+            
+            if parsed_json:
+                if required_keys:
+                    missing = [k for k in required_keys if k not in parsed_json]
+                    if len(missing)==0:
+                        return {k: parsed_json[k] for k in required_keys}
+                else:
+                    return parsed_json
+                    
+            current_text = fixed_str
+        except Exception:
+            continue
+    raise ValueError(f'Failed to parse JSON after {max_retries} attempts. The following is the input JSON data:\n{message_content}\n\
+Analyse the changes necessary and revise the $JSON_BLOB to re-initiate the "Thought-Action-Observation" step for the required task in the workflow. \
+Ensure that your response aligns with the specified $JSON_BLOB format.')
 
 def strip_json_markdown(cleaned: str) -> str:
     """
@@ -50,39 +129,9 @@ def _extract_tool_payload(llm, tools, message: AIMessage) -> Optional[Dict[str, 
     raw = match.group(1).strip()
 
     # Step 1: Ask the LLM to validate / repair JSON
-    validator_prompt = (
-    "You are a STRICT JSON TOOL-CALL VALIDATOR and REPAIRER.\n\n"
-    "GOAL:\n"
-    "Return exactly ONE JSON object representing a tool call.\n"
-    "The output MUST be syntactically valid JSON and MUST conform to the tool schema.\n\n"
-    "STRICT OUTPUT RULES (NON-NEGOTIABLE):\n"
-    "- Output ONLY valid JSON, no markdown, no code fences, no explanations.\n"
-    "- The JSON must be a single object (not a list).\n"
-    "- Do NOT add extra top-level keys.\n"
-    "- Do NOT rename keys.\n"
-    "- Do NOT change the selected tool name.\n"
-    "- Ensure ALL required tool arguments are present under `arguments`.\n"
-    "- If the input cannot be repaired into schema-valid JSON, output EXACTLY: null\n\n"
-    "CRITICAL JSON ESCAPING RULES (MUST FOLLOW):\n"
-    "- Every string value MUST be valid JSON string syntax.\n\n"
-    "###Escape all special characters inside code values:\n"
-    "- Newlines must be written as \\n (not literal newlines)\n"
-    "- Tabs must be written as \\t\n"
-    "- Carriage returns must be written as \\r\n"
-    "- Backslashes must be escaped as \\\\\n"
-    "- Double quotes inside strings must be escaped as \\\"\n"
-    "- Do NOT output unescaped control characters (U+0000 through U+001F) in any string.\n"
-    "- If a value contains code, keep it as a single JSON string with proper escapes.\n\n"
-    "REQUIRED TOOL-CALL SHAPE:\n"
-    '{"name": "<tool_name>", "arguments": { <tool_argument_key_values> } }\n\n'
-    "AVAILABLE TOOL SCHEMAS (authoritative):\n"
-    f"{tools}\n\n"
-    "INPUT (may be invalid JSON):\n"
-    f"{raw}\n"
-)
-
+    json_validator_prompt = json_validator_prompt_template.format(tools=tools, input=raw)
     llm_response = llm.invoke([
-        HumanMessage(content=validator_prompt)
+        HumanMessage(content=json_validator_prompt)
     ])
 
     cleaned = llm_response.content.strip()
@@ -122,7 +171,6 @@ def _extract_tool_payload(llm, tools, message: AIMessage) -> Optional[Dict[str, 
         "args": args,
     }
 
-
 def _to_tool_call_ai_message(llm, tools, message: AIMessage) -> AIMessage:
     """
     Convert a text-based tool call inside AIMessage.content into an AIMessage
@@ -159,6 +207,3 @@ def _to_tool_call_ai_message(llm, tools, message: AIMessage) -> AIMessage:
 
 # This is the chain you plug in between the model and ToolNode
 tool_call_normalizer = RunnableLambda(_to_tool_call_ai_message)
-
-# Example composition:
-# chain = prompt | llm | tool_call_normalizer

@@ -1,18 +1,21 @@
 import os, sys
+import json
 from os.path import isfile, isdir, join, abspath
+from typing  import List, Any
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode
 from langchain.tools.render import render_text_description_and_args
-from chains import get_llm, prompt
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, AnyMessage
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from chains import get_llm
 from schemas import AgentState
 
+from chain_templete import TOOL_SYSTEM_PROMPT, TOOL_HUMAN_PROMPT
+from tools_definition import set_root_dir, tools
 from tool_formatter import _to_tool_call_ai_message
+from nodes_templete import *
 
-# --- Tools Definition ---
-# These are the capabilities the Agent has access to.
-
-ROOT_DIR = os.getenv("ROOT_DIR")
 API_KEY = None
 
 def set_api_key(api_key):
@@ -20,140 +23,208 @@ def set_api_key(api_key):
     API_KEY = api_key
     return API_KEY
 
-@tool("read_file")
-def read_file(file_path: str) -> str:
-    """Tool to read the contents of a file from the local filesystem."""
-    
-    print("INSIDE read_file")
-    fpath = join(ROOT_DIR, file_path)
-    fpath = abspath(fpath)
-    try:
-        assert isdir(ROOT_DIR)
-        assert isfile(fpath)
-        with open(fpath, 'r') as f:
-            return f"Contemts of file `{file_path}`: \n\n{f.read()}"
-    except Exception as e:
-        return f"Error {e}: File '{file_path}' not found."
+class ToolCallingAgent:
+    def __init__(self, api_key, tool_list: List[Any]=None):
+        if tool_list:
+            self.tool_node = ToolNode(tool_list)
+        else:
+            self.tool_node = ToolNode(list(tools.values()))
+        self.api_key = api_key
+        
+    def should_continue(self, state: AgentState) -> Literal["tool_node", "reflect", "__end__"]:
+        """
+        Determines the next step based on the Agent's last message.
+        If the Agent made a tool call, we route to 'tools'.
+        Otherwise, we finish (END).
+        """
+        print("\n" + "="*30)
+        print("ROUTING: should_continue_after_tool_call")
+        print("="*30)
+        
+        messages = state["messages"]
+        print("STATE MESSAGES:")
+        print([f"{f.type}:{f.content}" for f in messages])
+        last_message = messages[-1]
+        print(f" Total messages: {len(messages)}")
+        print(f" Last message is tool call: {hasattr(last_message, 'tool_calls')}")
+        
+        try:
+            tool_calls = getattr(last_message, 'tool_calls', None)
+            if tool_calls[0]["name"] == "final_answer":
+                return  "__end__"
+            elif tool_calls:=getattr(last_message, 'tool_calls', None):
+                print(f"\tFound tool call(s):\n{tool_calls}")
+                print("\tROUTING TO: tools")
+                print("="*30 + "\n")
+                return "tool_node"
+            else:
+                raise ValueError("No valid tool_calls found in agent state.")
+        except Exception as e:
+            # If no tool calls, we are done
+            print("No tool calls found")
+            print("ROUTING TO: __end__")
+            print("="*30 + "\n")
+            return "reflect"
 
-@tool("write_file")
-def write_file(file_path: str, content: str) -> str:
+    def tool_calling_node(self, state: AgentState):
+        global API_KEY
+        print("INSIDE TOOL CALLING NODE")
+        
+        # Bind tools to the LLM so it knows they exist
+        tools_str = render_text_description_and_args(list(tools.values()))
+        llm_with_tools = get_llm(API_KEY).bind_tools(list(tools.values()))
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", TOOL_SYSTEM_PROMPT),
+            ("human", TOOL_HUMAN_PROMPT),
+            ("placeholder", "{chat_messages}"), # This injects the conversation history
+        ])
+        
+        tool_prompt = prompt.partial(tools=tools_str)
+        chain = (tool_prompt | llm_with_tools)
+        
+        response = chain.invoke({
+            "user_input": state["messages"][0].content,
+            "chat_messages": state["messages"][1:] if len(state["messages"])>1 else []})
+        if not hasattr(response, "tool_calls"):
+            print("USING TOOL WRAPPER")
+            response = _to_tool_call_ai_message(get_llm(API_KEY), tools_str, response)
+        elif len(getattr(response, "tool_calls"))>1:
+            print("ENFORCING SINGLE TOOL")
+            response.tool_calls = [response.tool_calls[0]]
+        print(response)
+        return {"messages": [response]}
+
+class ReflectionAgent:
     """
-    Write text content to an existing file on the local filesystem.
-
-    PURPOSE:
-        This tool MUST be used whenever the user asks to:
-        - Write code to a file
-        - Save generated code, scripts, or configuration to disk
-        - Overwrite the contents of an existing file
-        - Persist generated output to a specific file path
-
-        The tool overwrites the target file completely.
-        It does NOT create new files or directories.
-
-    WHEN TO USE:
-        Call this tool if the user explicitly or implicitly requests:
-        - "write this to <file>"
-        - "save the code in <file>"
-        - "update <file> with the following content"
-        - "store the output in <file>"
-
-    WHEN NOT TO USE:
-        - If the user only asks for an explanation
-        - If the user asks to read or inspect a file
-        - If the file path does not already exist
-        - If no file output is requested
-
-    PARAMETERS:
-        file_path (str):
-            A relative path (from ROOT_DIR) to an EXISTING file.
-            The file MUST already exist.
-            Example:
-                "main.py"
-                "src/utils/helpers.py"
-
-        content (str):
-            The full text content to write into the file.
-            This content completely replaces the existing file contents.
-            For code generation:
-                - Must be valid, executable code
-                - Must follow PEP 8 style guidelines
-                - Must include appropriate inline comments
-
-    BEHAVIOR:
-        - Resolves the absolute path using ROOT_DIR
-        - Verifies that ROOT_DIR exists
-        - Verifies that the target file exists
-        - Overwrites the file with the provided content
-        - Returns a success message including the written content
-
-    RETURNS:
-        str:
-            On success:
-                A confirmation message indicating the file path
-                and echoing the written content.
-
-            On failure:
-                A descriptive error message explaining what went wrong.
-
-    FAILURE CONDITIONS:
-        - ROOT_DIR does not exist
-        - file_path does not point to an existing file
-        - Insufficient filesystem permissions
-        - Any I/O error during writing
-
-    IMPORTANT RULES FOR TOOL-CALLING MODELS:
-        - You MUST provide BOTH `file_path` and `content`
-        - Do NOT omit required arguments
-        - Do NOT include explanations outside the tool call
-        - Do NOT attempt to create new files
-        - Do NOT call this tool unless a file write is explicitly required
-
-    EXAMPLE TOOL CALL (JSON):
-        {
-            "file_path": "main.py",
-            "content": "def main():\n    print('Hello, world!')\n\nif __name__ == '__main__':\n    main()\n"
+    Agent responsible for reflecting on tool execution results
+    and deciding whether the task is DONE or should CONTINUE.
+    """
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.reflection_state = None
+        print(f"\tReflectionAgent initialized")
+        
+    def user_input_node(self, state: AgentState):
+        user_inp = ""
+        while True:
+            user_inp = input(state["reflections"][-1].additional_kwargs["instruction"]+"\n\nPlease enter a prompt to continue...")
+            if len(user_inp.strip())>0:
+                break
+        return {
+            "messages": [HumanMessage(content=user_inp)]
         }
-    """
     
-    print("INSIDE write_file")
-    print(file_path)
-    print(content)
+    def reflect(self, state: AgentState):
+        print("\n" + "="*60)
+        print("NODE: properties_agent.reflect")
+        print("="*60)
+        
+        messages = state["messages"]
+        original_request = messages[0].content
+        assert original_request
+        print(f"Original Request: {original_request}...")
+        
+        tool_name = getattr(messages[-1], "name", None)
+        tool_result = getattr(messages[-1], "content", None)
+        assert tool_name
+        assert tool_result
+        print(f"Tool Result Preview: {messages[-1]}...")
     
-    fpath = join(ROOT_DIR, file_path)
-    fpath = abspath(fpath)
-    try:
-        assert isdir(ROOT_DIR)
-        with open(fpath, 'w') as f:
-            f.write(content)
-        assert isfile(fpath)
-        return f"Successfully wrote to '{file_path}'.\n\nPYTHON CODE:\n\n{content}"
-    except Exception as e:
-        return f"Error writing file `{file_path}`: {e}"
-
-# List of available tools
-tools = {
-    # "read_file": read_file,
-    "write_file": write_file,
-}
-
-# --- Node Functions ---
-
-def tool_calling_node(state: AgentState):
-    print("INSIDE TOOL CALLING NODE")
-    # Bind tools to the LLM so it knows they exist
-    llm_with_tools = get_llm(API_KEY).bind_tools(list(tools.values()))
+        # prompt_text = REFLECTION_TEMPLATE_PROMPT.format(
+        #     reflection_schema=json.dumps(REFLECTION_OUTPUT_SCHEMA),
+        #     tool_result=tool_result,
+        #     original_request=original_request,
+        # )
+        tools_str = render_text_description_and_args(list(tools.values()))
+        prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(content=REFLECTION_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="chat_messages", optional=True),
+            HumanMessage(content=REFLECTION_TEMPLATE_PROMPT),
+        ])
+        
+        print(" Invoking LLM for reflection...")
+        llm = get_llm(self.api_key)
+        reflection_llm = llm.with_structured_output(ReflectionOutput)
+        reflection_chain = (prompt_template | reflection_llm)
+        response = reflection_chain.invoke({
+            "chat_messages": state["messages"][:-1],
+            "reflection_schema": json.dumps(REFLECTION_OUTPUT_SCHEMA),
+            "tools": tools_str,
+            "tool_name": tool_name,
+            "tool_result": tool_result,
+            "original_request": original_request
+        })
+        
+        normalized = response.decision
+        reflection_id = len(state["messages"])
+        agent_state = {
+            "messages": [
+                HumanMessage(content=f"[REFLECTION] {normalized}")
+            ],
+            "reflections": [
+                AIMessage(content=normalized, additional_kwargs=response.model_dump())
+            ],
+            "reflection_ids": state.get("reflection_ids", [])+[reflection_id],
+        }
+        self.reflection_state = {
+            "messages": state["messages"].append(
+                HumanMessage(content=f"[REFLECTION] {normalized}")
+            ),
+            "reflections": state["reflections"].append(
+                AIMessage(content=normalized, additional_kwargs=response.model_dump())
+            ),
+            "reflection_ids": state.get("reflection_ids", []).append([reflection_id]),
+        }
+        
+        print("*"*60 + "\n")
+        print(response)
+        print(agent_state)
+        print("*"*60 + "\n")
+        return agent_state
     
-    tools_str = render_text_description_and_args(list(tools.values()))
-    
-    tool_prompt = prompt.partial(tools=tools_str)
-    chain = (tool_prompt | llm_with_tools)
-    
-    response = chain.invoke({"chat_messages": state["messages"]})
-    print(response)
-    if not hasattr(response, "tool_call_id"):
-        print("USING TOOL WRAPPER")
-        response = _to_tool_call_ai_message(get_llm(API_KEY), tools_str, response)
-    return {"messages": [response]}
-
-# We use LangGraph's built-in ToolNode for executing tool calls
-tool_node = ToolNode(list(tools.values()))
+    def should_continue(self, state: AgentState) -> Literal["tool_calling_node", "user_input_node", "__end__"]:
+        """
+        Routes after reflection_node.
+        Uses STRICT prefix matching for deterministic routing.
+        
+        Checks reflection message:
+        - If starts with "[REFLECTION] DONE" -> end
+        - If starts with "[REFLECTION] CONTINUE:" -> loop back to tool_calling_node
+        """
+        print("\n" + "="*30)
+        print("ROUTING: should_continue_after_reflection")
+        print("="*30)
+        
+        messages = state["messages"]
+        reflection_messages = state["reflections"]
+        last_message = messages[-1]
+        last_reflection_message = reflection_messages[-1]
+        
+        print(f" Total messages: {len(messages)}")
+        print(last_message)
+        print(f" Total reflections: {len(reflection_messages)}")
+        print(last_reflection_message)
+        
+        if hasattr(last_reflection_message, 'additional_kwargs'):
+            # Strict prefix matching with upper() for case-insensitive comparison
+            decision = last_reflection_message.additional_kwargs.get("decision", None)
+            instruction = last_reflection_message.additional_kwargs.get("instruction", None)
+            
+            try:
+                if decision.lower()=="done":
+                    print(" ROUTING TO: __end__")
+                    print("="*30 + "\n")
+                    return "__end__"
+                elif decision.lower()=="continue":
+                    print(" ROUTING TO: tool_calling_node")
+                    print("="*30 + "\n")
+                    return "tool_calling_node"
+                elif decision.lower()=="user_input":
+                    print(" ROUTING TO: user_input")
+                    print("="*30 + "\n")
+                    return "user_input_node"
+                else:
+                    raise ValueError("No decision reached by the reflection agent.")
+            except Exception as e:
+                print(f"Reflection failed with error: {e}")
+                return "__end__"

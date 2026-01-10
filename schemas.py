@@ -1,4 +1,4 @@
-from typing import Annotated, Sequence, TypedDict
+from typing import Annotated, List, Sequence, TypedDict
 from langgraph.graph.message import add_messages
 
 class AgentState(TypedDict):
@@ -10,3 +10,5 @@ class AgentState(TypedDict):
     rather than overwriting the history.
     """
     messages: Annotated[Sequence, add_messages]
+    reflections: Annotated[Sequence, add_messages]
+    reflection_ids: List[int] = []

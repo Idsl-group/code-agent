@@ -45,12 +45,21 @@ def run_cli(args):
     if hasattr(final_message, 'content'):
         print(final_message.content)
     
-    # If there were tool calls, you can inspect them here if needed
-    print(final_message)
-    if hasattr(final_message, "tool_call_id"):
-        print("\nTools used:", final_message.name)
-    else:
-        print("\nTools used:", final_message.tool_calls)
+    # # If there were tool calls, you can inspect them here if needed
+    # print(final_message)
+    # if hasattr(final_message, "tool_call_id"):
+    #     print("\nTools used:", final_message.name)
+    # else:
+    #     print("\nTools used:", final_message.tool_calls)
+    
+    print(f"\n Message Type: {final_message.type}")
+    print(f"\tFull Message: {final_message.content}")
+    
+    # Only check for tool_calls if it's an AIMessage
+    if tool_calls:=getattr(final_message, "tool_calls", None):
+        print("\n Tools used:")
+        for tc in tool_calls:
+            print(f"   - {tc.get('name', 'unknown')}: {tc.get('args', {})}")
 
 if __name__ == "__main__":
     # Check for API Key
