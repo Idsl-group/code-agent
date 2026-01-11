@@ -1,4 +1,6 @@
 from typing import Literal
+from IPython.display import Image
+
 from langgraph.graph import StateGraph, START, END
 
 from schemas import AgentState
@@ -44,6 +46,18 @@ def build_graph(api_key):
     )
     
     coding_agent_graph = workflow.compile()
+    
+    print("\nGraph compiled successfully!")
+    graph_viz = coding_agent_graph.get_graph()
+
+    # print Mermaid text
+    print(graph_viz.draw_mermaid())
+
+    # this creates graph.png using Mermaid
+    png_bytes = graph_viz.draw_mermaid_png()
+    with open("graph.png", "wb") as f:
+        f.write(png_bytes)
+
     print("\n Graph compiled successfully!")
     print(" Reflection loop enabled: reflection_node can route back to tool_calling_node")
     print("="*60 + "\n")
