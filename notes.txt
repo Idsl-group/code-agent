@@ -1,0 +1,4 @@
+python .\main.py
+mcpo --port 8003 --api-key "top-secret" --server-type "streamable-http" -- http://127.0.0.1:8002/mcp
+conda activate openwebui 
+open-webui serve --port 8001

@@ -1,0 +1,186 @@
+[
+    {
+        "name": "conversational_response",
+        "title": null,
+        "description": "Return a non-terminal, conversational message to the user.\n\nPURPOSE:\n    This tool is used to send an intermediate or conversational response\n    to the user that does NOT represent the final completion of the task.\n\n    It should be used for:\n    - Clarifications\n    - Status updates\n    - Explanatory messages\n    - Requests for additional information\n    - Intermediate reasoning summaries\n\n    This tool does NOT end the workflow.\n\nWHEN TO USE:\n    Call this tool if the user interaction requires:\n    - Ongoing dialogue\n    - Additional steps before a final answer\n    - Acknowledgement of input before proceeding\n    - Explanations without task completion\n\nWHEN NOT TO USE:\n    - If the task is fully complete\n    - If the user expects a final, definitive answer\n    - If no further interaction is required\n\nPARAMETERS:\n    response (str):\n        The conversational message to return to the user.\n        This message should be:\n        - Clear and concise\n        - Helpful and context-aware\n        - Free of internal reasoning or system details\n\nRETURNS:\n    str:\n        The provided conversational response, returned verbatim.\n\nIMPORTANT RULES FOR TOOL-CALLING MODELS:\n    - Do NOT include tool names or internal logic in the response\n    - Do NOT mark the task as complete\n    - Do NOT provide a final answer using this tool\n    - Always use this tool instead of free-text replies for intermediate communication\n\nEXAMPLE TOOL CALL (JSON):\n    {\n        \"response\": \"I’ve located the file and will update it next.\"\n    }",
+        "inputSchema": {
+            "properties": {
+                "response": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "response"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "result": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+        },
+        "icons": null,
+        "annotations": null,
+        "meta": {
+            "_fastmcp": {
+                "tags": []
+            }
+        },
+        "execution": null
+    },
+    {
+        "name": "final_answer",
+        "title": null,
+        "description": "Return the final, user-facing answer and terminate the workflow.\n\nPURPOSE:\n    This tool is used to deliver the final result of the task to the user.\n    Calling this tool indicates that:\n    - All required steps have been completed\n    - No further tools should be called\n    - The workflow should terminate\n\n    This is the ONLY tool that represents task completion.\n\nWHEN TO USE:\n    Call this tool if:\n    - The user’s request has been fully and correctly satisfied\n    - No further clarification or iteration is needed\n    - The final output is ready to be presented\n\nWHEN NOT TO USE:\n    - If additional tools must still be executed\n    - If the task is incomplete or partially complete\n    - If the user expects further interaction or refinement\n\nPARAMETERS:\n    answer (str):\n        The final response to the user.\n        This should be:\n        - Complete and accurate\n        - Clearly formatted\n        - Free of internal reasoning, system messages, or tool metadata\n\nRETURNS:\n    str:\n        The provided final answer, returned verbatim.\n\nIMPORTANT RULES FOR TOOL-CALLING MODELS:\n    - This tool MUST be called exactly once per completed task\n    - Do NOT include analysis or internal reasoning\n    - Do NOT call any other tools after this one\n    - Do NOT provide the final answer outside this tool\n\nEXAMPLE TOOL CALL (JSON):\n    {\n        \"answer\": \"The Fibonacci function has been written to fibonacci.py successfully.\"\n    }",
+        "inputSchema": {
+            "properties": {
+                "answer": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "answer"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "result": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+        },
+        "icons": null,
+        "annotations": null,
+        "meta": {
+            "_fastmcp": {
+                "tags": []
+            }
+        },
+        "execution": null
+    },
+    {
+        "name": "read_file",
+        "title": null,
+        "description": "Read and return the full contents of an existing file from the local filesystem.\n\nPURPOSE:\n    This tool is used to retrieve and inspect the contents of an existing file.\n    It is strictly READ-ONLY and must never be used to modify, create, or delete files.\n\n    This tool should be called whenever the user needs to:\n    - View the contents of a file\n    - Inspect existing code or text\n    - Read configuration files or scripts\n    - Understand what is currently stored in a specific file\n\nWHEN TO USE:\n    Call this tool if the user explicitly or implicitly requests to:\n    - \"read <file>\"\n    - \"open <file>\"\n    - \"show the contents of <file>\"\n    - \"display <file>\"\n    - \"inspect <file>\"\n    - \"what is inside <file>\"\n\nWHEN NOT TO USE:\n    - If the user asks to write, update, or overwrite a file\n    - If the user asks to create a new file\n    - If the user requests an explanation without needing file contents\n    - If the file path does not exist\n    - If the user requests directory listings or metadata\n\nPARAMETERS:\n    file_path (str):\n        A relative file path from ROOT_DIR pointing to an EXISTING file.\n        The file must already exist on disk.\n\n        Examples:\n            \"main.py\"\n            \"src/utils/helpers.py\"\n            \"config/settings.yaml\"\n\nBEHAVIOR:\n    - Resolves the absolute file path relative to ROOT_DIR\n    - Verifies that ROOT_DIR exists\n    - Verifies that the target file exists\n    - Opens the file in read-only mode\n    - Reads and returns the entire file contents as a string\n\nRETURNS:\n    str:\n        On success:\n            A string containing the full contents of the file,\n            prefixed with a short label identifying the file name.\n\n        On failure:\n            A descriptive error message indicating that the file\n            could not be found or read.\n\nFAILURE CONDITIONS:\n    - ROOT_DIR does not exist\n    - file_path does not refer to an existing file\n    - Insufficient permissions to read the file\n    - Any I/O error during file access\n\nIMPORTANT RULES FOR TOOL-CALLING MODELS:\n    - You MUST provide the `file_path` argument\n    - Do NOT invent or guess file paths\n    - Do NOT include explanations outside the tool call\n    - Do NOT attempt to modify file contents\n    - Do NOT call this tool unless file contents are explicitly required\n\nEXAMPLE TOOL CALL (JSON):\n    {\n        \"file_path\": \"main.py\"\n    }",
+        "inputSchema": {
+            "properties": {
+                "file_path": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "file_path"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "result": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+        },
+        "icons": null,
+        "annotations": null,
+        "meta": {
+            "_fastmcp": {
+                "tags": []
+            }
+        },
+        "execution": null
+    },
+    {
+        "name": "write_file",
+        "title": null,
+        "description": "    Write text content to an existing file on the local filesystem.\n\n    PURPOSE:\n        This tool MUST be used whenever the user asks to:\n        - Write code to a file\n        - Save generated code, scripts, or configuration to disk\n        - Overwrite the contents of an existing file\n        - Persist generated output to a specific file path\n\n        The tool overwrites the target file completely.\n        It does NOT create new files or directories.\n\n    WHEN TO USE:\n        Call this tool if the user explicitly or implicitly requests:\n        - \"write this to <file>\"\n        - \"save the code in <file>\"\n        - \"update <file> with the following content\"\n        - \"store the output in <file>\"\n\n    WHEN NOT TO USE:\n        - If the user only asks for an explanation\n        - If the user asks to read or inspect a file\n        - If the file path does not already exist\n        - If no file output is requested\n\n    PARAMETERS:\n        file_path (str):\n            A relative path (from ROOT_DIR) to an EXISTING file.\n            The file MUST already exist.\n            Example:\n                \"main.py\"\n                \"src/utils/helpers.py\"\n\n        content (str):\n            The full text content to write into the file.\n            This content completely replaces the existing file contents.\n            For code generation:\n                - Must be valid, executable code\n                - Must follow PEP 8 style guidelines\n                - Must include appropriate inline comments\n\n    BEHAVIOR:\n        - Resolves the absolute path using ROOT_DIR\n        - Verifies that ROOT_DIR exists\n        - Verifies that the target file exists\n        - Overwrites the file with the provided content\n        - Returns a success message including the written content\n\n    RETURNS:\n        str:\n            On success:\n                A confirmation message indicating the file path\n                and echoing the written content.\n\n            On failure:\n                A descriptive error message explaining what went wrong.\n\n    FAILURE CONDITIONS:\n        - ROOT_DIR does not exist\n        - file_path does not point to an existing file\n        - Insufficient filesystem permissions\n        - Any I/O error during writing\n\n    IMPORTANT RULES FOR TOOL-CALLING MODELS:\n        - You MUST provide BOTH `file_path` and `content`\n        - Do NOT omit required arguments\n        - Do NOT include explanations outside the tool call\n        - Do NOT attempt to create new files\n        - Do NOT call this tool unless a file write is explicitly required\n\n    EXAMPLE TOOL CALL (JSON):\n        {\n            \"file_path\": \"main.py\",\n            \"content\": \"def main():\n    print('Hello, world!')\n\nif __name__ == '__main__':\n    main()\n\"\n        }\n    ",
+        "inputSchema": {
+            "properties": {
+                "file_path": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "file_path",
+                "content"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "result": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+        },
+        "icons": null,
+        "annotations": null,
+        "meta": {
+            "_fastmcp": {
+                "tags": []
+            }
+        },
+        "execution": null
+    },
+    {
+        "name": "coding_agent",
+        "title": null,
+        "description": "Execute a coding task by delegating it to a specialized coding agent.\n\nPURPOSE:\n    This tool is used to handle requests that require software engineering\n    work, including code generation, modification, analysis, or debugging.\n    It acts as an entry point to a dedicated coding agent capable of\n    reasoning about files, functions, and program structure.\n\n    The coding agent is responsible for producing correct, executable,\n    and well-structured code according to the user’s request.\n\nWHEN TO USE:\n    Call this tool if the user request involves:\n    - Writing new code or scripts\n    - Modifying or refactoring existing code\n    - Implementing algorithms or data structures\n    - Debugging or fixing errors in code\n    - Explaining or analyzing code behavior\n    - Generating project scaffolding or utilities\n\nWHEN NOT TO USE:\n    - If the user request is purely conversational\n    - If no programming or code-related task is required\n    - If the task can be completed by a simpler, non-coding tool\n\nPARAMETERS:\n    query (str):\n        A clear, self-contained description of the coding task to perform.\n        This may include:\n        - The programming language\n        - The desired functionality or behavior\n        - Constraints, style requirements, or standards (e.g., PEP 8)\n        - References to files, functions, or components involved\n\n        The query should contain all information needed for the coding\n        agent to proceed without further clarification whenever possible.\n\nBEHAVIOR:\n    - Forwards the query to the coding agent\n    - Allows the coding agent to plan, generate, or modify code as needed\n    - Returns the coding agent’s result as a string\n\nRETURNS:\n    str:\n        The output produced by the coding agent. This may include:\n        - Generated or modified code\n        - Explanations or summaries of changes\n        - Error descriptions or debugging insights\n\nIMPORTANT RULES FOR TOOL-CALLING MODELS:\n    - Do NOT respond with free text when this tool is appropriate\n    - Do NOT partially execute coding tasks outside this tool\n    - Always pass the full user request as the `query`\n    - Treat the returned value as authoritative output from the coding agent\n\nEXAMPLE TOOL CALL (JSON):\n    {\n        \"query\": \"Write a Python function that computes the Fibonacci sequence using dynamic programming.\"\n    }",
+        "inputSchema": {
+            "properties": {
+                "query": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "query"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "result": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+        },
+        "icons": null,
+        "annotations": null,
+        "meta": {
+            "_fastmcp": {
+                "tags": []
+            }
+        },
+        "execution": null
+    }
+]

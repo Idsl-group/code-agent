@@ -1,3 +1,5 @@
+import os, json
+from os.path import isfile, isdir, join
 from typing import Literal
 from IPython.display import Image
 
@@ -8,6 +10,19 @@ from nodes import set_api_key
 from nodes import ToolCallingAgent, ReflectionAgent
 
 # --- Graph Construction ---
+
+def get_latest_version(graphs, new_version_flag=False):
+    if graphs is None:
+        return "{:.2}".format(0.1)
+    version_keys = [float(f) for f in graphs.keys()]
+    if len(version_keys)>0:
+        version_keys = sorted(version_keys)
+        if new_version_flag:
+            new_version = version_keys[-1]+0.1
+            return "{:.2}".format(new_version)
+        return "{:.2}".format(version_keys[-1])
+    else:
+        return "{:.2}".format(0.1)
 
 def build_graph(api_key):
     set_api_key(api_key)
@@ -51,12 +66,31 @@ def build_graph(api_key):
     graph_viz = coding_agent_graph.get_graph()
 
     # print Mermaid text
-    print(graph_viz.draw_mermaid())
+    mermaid_xml = graph_viz.draw_mermaid()
+    print(mermaid_xml)
+    
+    new_version = False
+    if isfile(os.getenv("GRAPH_PATH")):
+        with open(os.getenv("GRAPH_PATH"), "r") as fp:
+            graphs = json.load(fp)
+        if graphs[get_latest_version(graphs)]==mermaid_xml:
+            new_version = False
+        else:
+            new_version = True
+            graphs[get_latest_version(graphs, new_version_flag=True)] = mermaid_xml
+            with open(os.getenv("GRAPH_PATH"), "w") as fp:
+                json.dump(graphs, fp)
+    else:
+        new_version = True
+        graphs = {get_latest_version(None): mermaid_xml}
+        with open(os.getenv("GRAPH_PATH"), "w") as fp:
+            json.dump(graphs, fp)
 
     # this creates graph.png using Mermaid
-    png_bytes = graph_viz.draw_mermaid_png()
-    with open("graph.png", "wb") as f:
-        f.write(png_bytes)
+    if new_version:
+        png_bytes = graph_viz.draw_mermaid_png()
+        with open("graph.png", "wb") as f:
+            f.write(png_bytes)
 
     print("\n Graph compiled successfully!")
     print(" Reflection loop enabled: reflection_node can route back to tool_calling_node")
