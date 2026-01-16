@@ -1,22 +1,24 @@
 import os, sys
-import json
+import json, uuid
 from os.path import isfile, isdir, join, abspath
+from argparse import Namespace
 from typing  import List, Any
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode
 from langchain.tools.render import render_text_description_and_args
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, AnyMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, ToolCall, AnyMessage
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from chains import get_llm
 from schemas import AgentState
 
 from chain_templete import TOOL_SYSTEM_PROMPT, TOOL_HUMAN_PROMPT
 from tools_definition import set_root_dir, tools
-from tool_formatter import _to_tool_call_ai_message
+from tool_formatter import _to_tool_call_ai_message, json_output_parser
 from nodes_templete import *
 
 API_KEY = None
+MAX_RETRIES = 5
 
 def set_api_key(api_key):
     global API_KEY
@@ -30,6 +32,9 @@ class ToolCallingAgent:
         else:
             self.tool_node = ToolNode(list(tools.values()))
         self.api_key = api_key
+        self.latest_decision = None
+        self.latest_instruction = None
+        self.reflection_directive = None
         
     def should_continue(self, state: AgentState) -> Literal["tool_node", "reflect", "__end__"]:
         """
@@ -70,27 +75,38 @@ class ToolCallingAgent:
         global API_KEY
         print("INSIDE TOOL CALLING NODE")
         
+        if state.get("reflections"):
+            for r in reversed(state["reflections"]):
+                self.latest_decision = r.additional_kwargs.get("decision", None)
+                self.latest_instruction = r.additional_kwargs.get("instruction", None)
+                break
+        
+        tool_list = list(tools.values())
         # Bind tools to the LLM so it knows they exist
-        tools_str = render_text_description_and_args(list(tools.values()))
-        llm_with_tools = get_llm(API_KEY).bind_tools(list(tools.values()))
+        tools_str = render_text_description_and_args(tool_list)
+        llm_with_tools = get_llm(API_KEY).bind_tools(tool_list)
+        
         prompt = ChatPromptTemplate.from_messages([
             ("system", TOOL_SYSTEM_PROMPT),
             ("human", TOOL_HUMAN_PROMPT),
-            ("placeholder", "{chat_messages}"), # This injects the conversation history
+            MessagesPlaceholder(variable_name="chat_messages", optional=True), # This injects the conversation history
         ])
-        
         tool_prompt = prompt.partial(tools=tools_str)
         chain = (tool_prompt | llm_with_tools)
         
+        chat_messages = state["messages"][1:] if len(state["messages"]) > 1 else []
         response = chain.invoke({
             "user_input": state["messages"][0].content,
-            "chat_messages": state["messages"][1:] if len(state["messages"])>1 else []})
-        if not hasattr(response, "tool_calls"):
+            "chat_messages": chat_messages,
+            })
+        tool_calls = getattr(response, "tool_calls", None)
+        if not tool_calls:
             print("USING TOOL WRAPPER")
             response = _to_tool_call_ai_message(get_llm(API_KEY), tools_str, response)
-        elif len(getattr(response, "tool_calls"))>1:
+        elif len(tool_calls)>1:
             print("ENFORCING SINGLE TOOL")
-            response.tool_calls = [response.tool_calls[0]]
+            response.tool_calls = [tool_calls[0]]
+            
         print(response)
         return {"messages": [response]}
 
@@ -107,12 +123,17 @@ class ReflectionAgent:
     def user_input_node(self, state: AgentState):
         user_inp = ""
         while True:
-            user_inp = input(state["reflections"][-1].additional_kwargs["instruction"]+"\n\nPlease enter a prompt to continue...")
+            query = state["reflections"][-1].additional_kwargs["instruction"]+"\n\nPlease enter a prompt to CONTINUE...\n\n"
+            user_inp = input(query)
             if len(user_inp.strip())>0:
                 break
-        return {
-            "messages": [HumanMessage(content=user_inp)]
-        }
+        tool_id = str(uuid.uuid4())
+        tool_calls = {"name": "user_input", "args": {"query": query, "input": user_inp}}
+        state["messages"].extend([
+            AIMessage(content=f"Executing tool-call for user input: \n\n```json\n{json.dumps(tool_calls, indent=2)}\n```\n"),
+            ToolMessage(name="user_input", content=user_inp, tool_call_id=tool_id),
+        ])
+        return state
     
     def reflect(self, state: AgentState):
         print("\n" + "="*60)
@@ -121,20 +142,21 @@ class ReflectionAgent:
         
         messages = state["messages"]
         original_request = messages[0].content
-        assert original_request
+        assert len(original_request.strip())>0
+        print("REFLECTION MESSAGES:")
+        print([f"{f.type}:{f.content}" for f in messages])
         print(f"Original Request: {original_request}...")
         
-        tool_name = getattr(messages[-1], "name", None)
-        tool_result = getattr(messages[-1], "content", None)
+        last_message = messages[-1]
+        tool_name = getattr(last_message, "name", None)
+        tool_result = getattr(last_message, "content", None)
         assert tool_name
         assert tool_result
-        print(f"Tool Result Preview: {messages[-1]}...")
+        print(f"Tool Name: {tool_name} | Tool Result Preview: {tool_result}\n")
+        
+        if tool_name in ("user_input"):
+            tool_result = USER_INPUT_REFLECTION_DIRECTIVE.format(user_input=tool_result)
     
-        # prompt_text = REFLECTION_TEMPLATE_PROMPT.format(
-        #     reflection_schema=json.dumps(REFLECTION_OUTPUT_SCHEMA),
-        #     tool_result=tool_result,
-        #     original_request=original_request,
-        # )
         tools_str = render_text_description_and_args(list(tools.values()))
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=REFLECTION_SYSTEM_PROMPT),
@@ -144,18 +166,62 @@ class ReflectionAgent:
         
         print(" Invoking LLM for reflection...")
         llm = get_llm(self.api_key)
-        reflection_llm = llm.with_structured_output(ReflectionOutput)
-        reflection_chain = (prompt_template | reflection_llm)
-        response = reflection_chain.invoke({
-            "chat_messages": state["messages"][:-1],
-            "reflection_schema": json.dumps(REFLECTION_OUTPUT_SCHEMA),
-            "tools": tools_str,
-            "tool_name": tool_name,
-            "tool_result": tool_result,
-            "original_request": original_request
-        })
+        try:
+            reflection_llm = llm.with_structured_output(ReflectionOutput)
+            reflection_chain = (prompt_template | reflection_llm)
+        except Exception as e:
+            print("Error binding SCHEMA to LLM.")
+            raise ValueError(str(e))
+        
+        chat_messages = messages[:-1]
+        response = None
+        retry_ctr = 0
+        while retry_ctr<MAX_RETRIES:
+            try:
+                response = reflection_chain.invoke({
+                    "chat_messages": chat_messages,
+                    # "reflection_schema": json.dumps(REFLECTION_OUTPUT_SCHEMA),
+                    "reflection_schema": REFLECTION_OUTPUT_JSON,
+                    "tools": tools_str,
+                    "tool_name": tool_name,
+                    "tool_result": tool_result,
+                    "original_request": original_request
+                })
+                break
+            except Exception as e:
+                retry_ctr += 1
+                print(f"Structured output failed with error: {e} \nRetrying with `json_output_parser`")
+                reflection_json_chain = (prompt_template | llm)
+                ai_response = reflection_json_chain.invoke({
+                    "chat_messages": chat_messages,
+                    # "reflection_schema": json.dumps(REFLECTION_OUTPUT_SCHEMA),
+                    "reflection_schema": REFLECTION_OUTPUT_JSON,
+                    "tools": tools_str,
+                    "tool_name": tool_name,
+                    "tool_result": tool_result,
+                    "original_request": original_request
+                })
+                response = json_output_parser(llm, ai_response.content, required_keys=["decision", "instruction"], force_parse=False)
+                if not isinstance(response, dict):
+                    response = None
+                    continue
+            finally:
+                print(response)
+                if isinstance(response, dict) and (set(["decision", "instruction"])<=set(list(response.keys()))):
+                    response = ReflectionOutput(decision=response["decision"], instruction=response["instruction"])
+                    break
+                else:
+                    response = None
+                    print(f"Retrying Iteration: {retry_ctr}")
+                    continue
+        assert response
         
         normalized = response.decision
+        if (tool_name.lower() in ("user_input")) and (normalized.lower() in ("done")):
+            print("ENFORCING `CONTINUE` after `user_input`")
+            response.decision = "CONTINUE"
+            normalized = response.decision
+        
         reflection_id = len(state["messages"])
         agent_state = {
             "messages": [

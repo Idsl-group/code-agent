@@ -257,8 +257,7 @@ def write_file(file_path: str, content: str) -> str:
                 "src/utils/helpers.py"
 
         content (str):
-            The full text content to write into the file.
-            This content completely replaces the existing file contents.
+            The full text/code content to write into the file.
             For code generation:
                 - Must be valid, executable code
                 - Must follow PEP 8 style guidelines

@@ -106,9 +106,15 @@ def coding_agent(query: str) -> str:
     # Only check for tool_calls if it's an AIMessage
     if tool_calls:=getattr(final_message, "tool_calls", None):
         print("\n Tools used:")
+        tool_response = ""
         for tc in tool_calls:
-            print(f"   - {tc.get('name', 'unknown')}: {tc.get('args', {})}")
-    return final_message.content
+            tool_response += f"   - {tc.get('name', 'unknown')}: {tc.get('args', {})}\n\n"
+        print(tool_response)
+        return tool_response
+    else:
+        final_answer = "\n\n".join([f.content for f in final_state["messages"] if f.type=="ai"])
+        # return final_message.content
+        return final_answer
 
 def run_cli(args):
     # 1. Get user query from Args

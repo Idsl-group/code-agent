@@ -4,37 +4,37 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, TypeVar, 
 
 class ReflectionOutput(BaseModel):
     decision: Literal["DONE", "CONTINUE", "USER_INPUT"] = Field(
-        ..., description="Whether the task is complete or needs another iteration, or requires an input from the human user."
+        "CONTINUE", description="Whether the original task is complete, needs another iteration, or requires an input from the human user."
     )
     instruction: Optional[str] = Field(
         None,
-        description="A detailed fix instruction, required if decision is CONTINUE or USER_INPUT."
+        description="A detailed instruction text for the selected decision."
     )
 
 REFLECTION_OUTPUT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "additionalProperties": False,
-    "required": ["decision"],
+    "required": ["decision", "instruction"],
     "properties": {
         "decision": {"type": "string", "enum": ["DONE", "CONTINUE", "USER_INPUT"]},
-        "instruction": {"type": "string", "minLength": 1, "maxLength": os.getenv("REFLECTION_MAX_TOKENS", 1024)},
-    },
-    "allOf": [
-        {
-            "if": {"properties": {"decision": {"const": "CONTINUE"}}},
-            "then": {"required": ["instruction"]},
-        },
-        {
-            "if": {"properties": {"decision": {"const": "DONE"}}},
-            "then": {"not": {"required": ["instruction"]}},
-        },
-    ],
+        "instruction": {"type": "string"},
+    }
 }
+
+REFLECTION_OUTPUT_JSON = """```json
+{
+  // REQUIRED
+  "decision": "<string: one of 'DONE' | 'CONTINUE' | 'USER_INPUT'>",
+  // REQUIRED
+  "instruction": "<string: A detailed instruction text for the selected decision.>"
+}
+```
+"""
 
 REFLECTION_SYSTEM_PROMPT = """You are a deterministic REFLECTION AGENT.
 
-You evaluate whether the tool execution result satisfies the original user request.
+You evaluate whether the tool execution result satisfies the original user task.
 
 You MUST output exactly ONE valid JSON object that conforms to the provided JSON schema.
 No markdown, no code fences, no explanations, no extra text.
@@ -46,16 +46,26 @@ Return only the decision and, if needed, a fix instruction.
 
 REFLECTION_TEMPLATE_PROMPT = """You are a REFLECTION AGENT that reviews tool execution results.
 
-Your job is to output ONE JSON object that conforms EXACTLY to the schema.
+Your job is to output a JSON object in markdown format that conforms EXACTLY to the given schema.
+
+Available Tools:
+{tools}
+
+Original user task:
+{original_request}
+
+Current Tool execution result:
+TOOL_NAME: {tool_name}
+TOOL_OUTPUT: {tool_result}
 
 DECISION RULES:
-- decision = "DONE" if the tool output fully satisfies the original request with no errors, missing requirements, or follow-up needed.
-- decision = "CONTINUE" if any part of the request is incomplete, incorrect, unusable, or requires revision, and the agent can proceed without asking the user anything.
+- decision = "DONE" if the tool execution result fully satisfies the original user task with no errors, missing requirements, or follow-up needed.
+- decision = "CONTINUE" if any part of the user task is incomplete, incorrect, unusable, or requires revision, and the agent can proceed without asking the user anything.
 - decision = "USER_INPUT" if the task cannot be completed without additional information from the user (for example: missing file path, missing required parameters, ambiguity between multiple valid options, access/permission constraints, or the tool output indicates a recoverable issue that requires the user to decide).
 
 INSTRUCTION FIELD RULES:
+- If decision = "DONE", include "instruction" describing why the original user task is complete based on the conversation history and the current Tool execution result.
 - If decision = "CONTINUE", include "instruction" describing the fix and the tool call to be executed in sufficient detail for the next agent step.
-- If decision = "DONE", do NOT include "instruction".
 - If decision = "USER_INPUT", include "instruction" as a single, direct sentence telling exactly what information the user must provide, do NOT include multiple questions.
 
 OUTPUT RULES (STRICT):
@@ -65,14 +75,18 @@ OUTPUT RULES (STRICT):
 
 JSON SCHEMA:
 {reflection_schema}
+"""
 
-Available Tools:
-{tools}
+USER_INPUT_REFLECTION_DIRECTIVE = """The following input was received from the user:
 
-Original user request:
-{original_request}
+<USER_INPUT>
+{user_input}
+</USER_INPUT>
 
-Current Tool execution result:
-TOOL_NAME: {tool_name}
-TOOL_OUTPUT: {tool_result}
+- Determine whether this input is sufficient to complete the original task.
+- If the task can be completed without any additional user information, follow the normal decision rules and execute the next decision.
+- If the task cannot stiil be completed without more information from the user, \
+    include an instruction that clearly and concisely states exactly what additional information the user must provide next.
+- Do not output decision `DONE` if steps still need to be performed to complete the original user task, \
+    `CONTINUE` with the next appropriate decision and instruction.
 """

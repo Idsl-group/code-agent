@@ -87,9 +87,7 @@ def json_output_parser(llm, message_content, required_keys=None, force_parse=Fal
             current_text = fixed_str
         except Exception:
             continue
-    raise ValueError(f'Failed to parse JSON after {max_retries} attempts. The following is the input JSON data:\n{message_content}\n\
-Analyse the changes necessary and revise the $JSON_BLOB to re-initiate the "Thought-Action-Observation" step for the required task in the workflow. \
-Ensure that your response aligns with the specified $JSON_BLOB format.')
+    raise ValueError(f'Failed to parse JSON after {max_retries} attempts. The following is the input JSON data:\n{message_content}')
 
 def strip_json_markdown(cleaned: str) -> str:
     """

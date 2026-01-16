@@ -39,7 +39,7 @@ def build_graph(api_key):
     # Set the entry point
     workflow.add_edge(START, "tool_calling_node")
     workflow.add_edge("tool_node", "reflection_node")
-    workflow.add_edge("user_input_node", "tool_calling_node")
+    workflow.add_edge("user_input_node", "reflection_node")
     # Add the conditional edges
     workflow.add_conditional_edges(
         "tool_calling_node",
