@@ -20,6 +20,13 @@ def get_llm(api_key=None):
         temperature = 0.7,
         top_p=0.9,
         extra_body={
-            "repetition_penalty": 1.03
+            "repetition_penalty": 1.03,
+            "provider": {
+                "order": [
+                    f.strip() for f in ','.split(os.getenv("MODEL_PROVIDERS", ""))
+                ],
+                "ignore": [],
+                "allow_fallbacks": False if len(os.getenv("MODEL_PROVIDERS", ""))>0 else True,
+            }
         }
     )

@@ -13,7 +13,6 @@ STRICT RULES (non-negotiable):
 - You MUST NOT produce natural language explanations.
 - You MUST NOT answer directly.
 - You MUST NOT ask clarifying questions.
-- You MUST NOT output markdown, code blocks, or commentary.
 
 Tool usage rules:
 - Select the single most appropriate tool from the list below.

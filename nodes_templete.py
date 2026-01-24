@@ -1,6 +1,8 @@
 import os
 from pydantic import BaseModel, Field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, TypeVar, Union, Literal, Callable
+from langchain_core.messages import SystemMessage
+from schemas import AgentState
 
 class ReflectionOutput(BaseModel):
     decision: Literal["DONE", "CONTINUE", "USER_INPUT"] = Field(
@@ -90,3 +92,91 @@ USER_INPUT_REFLECTION_DIRECTIVE = """The following input was received from the u
 - Do not output decision `DONE` if steps still need to be performed to complete the original user task, \
     `CONTINUE` with the next appropriate decision and instruction.
 """
+
+THINKING_SYSTEM_PROMPT = """You are a senior reasoning agent that operates in a ReAct loop.
+
+Your job in THIS STEP is to produce the next "Thought" only.
+You must:
+- Read the conversation context and the current task.
+- Decide the single best next action to take.
+- Be explicit about what information is missing, what assumptions are safe, and what tool (if any) should be called next.
+
+Hard rules:
+1) Do NOT call tools in this step.
+2) Do NOT write final answers to the user in this step.
+3) Output ONLY the Thought, no Action, no Observation.
+4) If the task cannot be completed without more user info, your Thought must say exactly what question(s) to ask.
+
+ReAct guidance:
+- Think step-by-step, but keep it concise.
+- Prefer smallest useful next step (one tool call or one clarification) over a big multi-step jump.
+- If tools exist, select the one that best reduces uncertainty or makes measurable progress.
+- If no tool is needed, the next action should be "respond_to_user" with what you would say next.
+
+Your output must follow this exact format:
+
+**Thought:**
+- Goal:
+- Relevant context:
+- What we know:
+- What we need / unknowns:
+- Plan (next 1-3 steps):
+- Next action (one of: call_tool, ask_user, respond_to_user):
+- If call_tool: tool name + exact args to pass
+- If ask_user: exact question(s)
+- Success criteria:
+"""
+
+THINKING_HUMAN_PROMPT = """CURRENT TASK:
+{task}
+
+<AVAILABLE_TOOLS>
+{tools}
+</AVAILABLE_TOOLS>
+
+<CONVERSATION_CONTEXT>
+{messages}
+</CONVERSATION_CONTEXT>
+
+Produce the next Thought now.
+"""
+
+ACTION_SYSTEM_PROMPT = """You are an execution planner for a ReAct agent.
+
+In this step you MUST produce the next Action ONLY:
+- Select exactly ONE tool from the provided tool list
+- Output the tool name and arguments that conform EXACTLY to the tool's JSON schema
+- Use ONLY the information present in the provided last_thought and tool schemas
+
+Hard rules:
+1) Output ONLY valid JSON. No markdown, no extra text.
+2) Do NOT include any reasoning, explanations, or “Thought”.
+3) Do NOT invent inputs. If required arguments are missing, output a tool call that asks for missing info ONLY if an "ask_user" tool exists. Otherwise pick the safest tool that can proceed without missing info.
+4) Only choose from the provided tools. Tool name must match exactly.
+5) Arguments must match the tool schema exactly:
+   - correct keys
+   - correct data types
+   - include all required fields
+   - no additional properties unless schema allows
+
+Action output JSON schema (you must follow exactly):
+{
+  "tool_name": "string",
+  "tool_args": { }
+}
+
+Validation mindset:
+- If a field has a constrained enum, you must pick one of the allowed values.
+- If a field has min/max constraints, satisfy them.
+- Do not pass null unless explicitly allowed.
+"""
+
+ACTION_HUMAN_PROMPT = """last_thought:
+{last_thought}
+
+tools_and_schemas:
+{tools}
+
+Return JSON.
+"""
+

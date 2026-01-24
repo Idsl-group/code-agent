@@ -1,5 +1,6 @@
 import os, sys
 import json
+from typing import Literal
 from os.path import isfile, isdir, join, abspath
 
 from langchain_core.tools import tool
@@ -9,11 +10,15 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 from langchain.prompts.chat import ChatPromptTemplate, MessagesPlaceholder
 from chains import get_llm
 from schemas import AgentState
+from tool_formatter import json_output_parser
 
 # --- Tools Definition ---
 # These are the capabilities the Agent has access to.
 
 ROOT_DIR = os.getenv("ROOT_DIR", "./")
+API_KEY = os.getenv("OPENAI_API_KEY")
+TOOL_DEBUG = True if int(os.getenv("TOOL_DEBUG", 0)) else False
+FILE_DATA = {}
 
 def set_root_dir(root_dir):
     global ROOT_DIR
@@ -75,10 +80,12 @@ def conversational_response(response: str) -> str:
 
     EXAMPLE TOOL CALL (JSON):
         {
-            "response": "I’ve located the file and will update it next."
+            "response": "I've located the file and will update it next."
         }
     """
-    print("INSIDE conversational_response")
+    
+    if TOOL_DEBUG:
+        print("INSIDE conversational_response")
     return response
 
 @tool("final_answer")
@@ -97,7 +104,7 @@ def final_answer(answer: str) -> str:
 
     WHEN TO USE:
         Call this tool if:
-        - The user’s request has been fully and correctly satisfied
+        - The user's request has been fully and correctly satisfied
         - No further clarification or iteration is needed
         - The final output is ready to be presented
 
@@ -129,7 +136,9 @@ def final_answer(answer: str) -> str:
             "answer": "The Fibonacci function has been written to fibonacci.py successfully."
         }
     """
-    print("INSIDE final_answer")
+    
+    if TOOL_DEBUG:
+        print("INSIDE final_answer")
     return answer
 
 @tool("read_file")
@@ -209,16 +218,54 @@ def read_file(file_path: str) -> str:
         }
     """
     
-    print("INSIDE read_file")
+    if TOOL_DEBUG:
+        print("INSIDE read_file")
     fpath = join(ROOT_DIR, file_path)
     fpath = abspath(fpath)
     try:
         assert isdir(ROOT_DIR)
         assert isfile(fpath)
         with open(fpath, 'r') as f:
-            return f"Contemts of file `{file_path}`: \n\n{f.read()}"
+            return f"Contents of file `{file_path}`: \n\n<FILE_CONTENT>\n{f.read()}\n</FILE_CONTENT>"
     except Exception as e:
         return f"Error {e}: File '{file_path}' not found."
+    
+@tool("generate_text_file")
+def generate_text_file(content: str) -> str:
+    """_summary_
+
+    Args:
+        content (str): _description_
+
+    Returns:
+        str: _description_
+    """
+    
+    global FILE_DATA
+    if TOOL_DEBUG:
+        print("INSIDE generate_text_file")
+    f_name = None
+    if "generate_text_file" not in FILE_DATA:
+        FILE_DATA["generate_text_file"] = {}
+    
+    fname_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", ),
+        ("humnan", )
+    ])
+    
+    fina_name_llm = get_llm(API_KEY)
+    file_name_chain = (fname_prompt_template | fina_name_llm)
+    file_name_response = file_name_chain.invode({
+        "file_content": content,
+        "invalid_filenames": "",
+    })
+    file_name_dict = json_output_parser(fina_name_llm, file_name_response.content, keys=["file_name"])
+    f_name = file_name_dict["file_name"]
+    
+    FILE_DATA["generate_text_file"][f_name] = content
+    
+    assert f_name
+    return f"Text file contents have been generated and saved as `{f_name}` in the file database. Use the `write_file` tool to save it to the local disk."
 
 @tool("write_file")
 def write_file(file_path: str, content: str) -> str:
@@ -295,11 +342,11 @@ def write_file(file_path: str, content: str) -> str:
     EXAMPLE TOOL CALL (JSON):
         {
             "file_path": "main.py",
-            "content": "def main():\n    print('Hello, world!')\n\nif __name__ == '__main__':\n    main()\n"
+            "content": "def main():\\n    print('Hello, world!')\\n\\nif __name__ == '__main__':\\n    main()\\n"
         }
     """
-    
-    print("INSIDE write_file")
+    if TOOL_DEBUG:
+        print("INSIDE write_file")
     print(file_path)
     print(content)
     

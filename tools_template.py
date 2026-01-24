@@ -17,7 +17,7 @@ json_validator_prompt_template = (
     "- Do NOT output unescaped control characters (U+0000 through U+001F) in any string.\n"
     "- If a value contains code, keep it as a single JSON string with proper escapes.\n\n"
     "REQUIRED TOOL-CALL SHAPE:\n"
-    '{"name": "<tool_name>", "arguments": { <tool_argument_key_values> } }\n\n'
+    '{{"name": "<tool_name>", "arguments": {{ <tool_argument_key_values> }} }}\n\n'
     "AVAILABLE TOOL SCHEMAS (authoritative):\n"
     "{tools}\n\n"
     "INPUT (may be invalid JSON):\n"
@@ -31,10 +31,10 @@ JSON_PARSER_TEMPLATE = {
 1. **Markdown Wrapper:** Your entire output must be wrapped in a single markdown code block specifying the language as 'json'.
    Example structure:
    ```json
-   {
+   {{
      "key1": "value1",
      "key2": "value2"
-   }
+   }}
    ```
 
 2. Standard JSON Syntax: - Use double quotes " for all keys and string values. Never use single quotes '.
@@ -48,13 +48,13 @@ JSON_PARSER_TEMPLATE = {
 If the input text implies a structure but is broken, reconstruct it to look like this:
 
 ```json
-{
+{{
   "tool_name": "tool_name_literal",
-  "tool_input": {
+  "tool_input": {{
     "argument_name1": argument_value1,
     "argument_name2": ["argument_value2_1", "argument_value2_2"]
-  }
-}
+  }}
+}}
 ```
 """,
    "human": """You are a helpful assistant that repairs malformed JSON. 

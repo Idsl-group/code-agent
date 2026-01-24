@@ -11,4 +11,8 @@ class AgentState(TypedDict):
     """
     messages: Annotated[Sequence, add_messages]
     reflections: Annotated[Sequence, add_messages]
+    thoughts: Annotated[Sequence, add_messages]
+    actions: Annotated[Sequence, add_messages]
     reflection_ids: List[int] = []
+    thought_ids: List[int] = []
+    action_ids: List[int] = []

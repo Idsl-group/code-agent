@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, START, END
 
 from schemas import AgentState
 from nodes import set_api_key
-from nodes import ToolCallingAgent, ReflectionAgent
+from nodes import ToolCallingAgent, ReflectionAgent, React
 
 # --- Graph Construction ---
 
@@ -28,19 +28,37 @@ def build_graph(api_key):
     set_api_key(api_key)
     tool_calling_agent = ToolCallingAgent(api_key)
     reflection_agent = ReflectionAgent(api_key)
+    react_agent = React(api_key)
     
     workflow = StateGraph(AgentState) # State object will follow the AgentState schema.
 
     # Add the nodes
+    workflow.add_node("thinking_node", react_agent.thinking_node)
+    workflow.add_node("action_node", react_agent.action_node)
     workflow.add_node("tool_calling_node", tool_calling_agent.tool_calling_node)
     workflow.add_node("tool_node", tool_calling_agent.tool_node)
     workflow.add_node("reflection_node", reflection_agent.reflect)
     workflow.add_node("user_input_node", reflection_agent.user_input_node)
     # Set the entry point
-    workflow.add_edge(START, "tool_calling_node")
-    workflow.add_edge("tool_node", "reflection_node")
+    # workflow.add_edge(START, "tool_calling_node")
+    # workflow.add_edge("tool_node", "reflection_node")
+    # workflow.add_edge("user_input_node", "reflection_node")
+    
+    workflow.add_edge(START, "thinking_node") # START -> PLAN
+    workflow.add_edge("thinking_node", "action_node") # START -> PLAN
+    workflow.add_edge("action_node", "tool_calling_node") # PLAN -> ACT
+    workflow.add_edge("tool_node", "reflection_node") # OBSERVE -> REFLECT
     workflow.add_edge("user_input_node", "reflection_node")
+    
     # Add the conditional edges
+    workflow.add_conditional_edges(
+        "action_node",
+        tool_calling_agent.should_continue,
+        {
+            "tool_calling_node": "tool_calling_node",
+            "__end__": END,
+        }
+    )
     workflow.add_conditional_edges(
         "tool_calling_node",
         tool_calling_agent.should_continue,
@@ -54,9 +72,12 @@ def build_graph(api_key):
         "reflection_node",
         reflection_agent.should_continue,
         {
-            "tool_calling_node": "tool_calling_node", 
+            # Match the new return values from should_continue
+            "thinking_node": "thinking_node", 
             "user_input_node": "user_input_node",
-             "__end__": END, 
+            "action_node": "action_node",
+            # "tool_calling_node": "tool_calling_node",
+            # "__end__": END, 
         },
     )
     
